@@ -1,7 +1,7 @@
 ﻿/*
-조작법 : 
+조작법 :
         스페이스바 : 점프
-        아래 방향키 : 빠르게 낙하
+        아래 방향키 : 빠르게 낙하 (5배속)
 */
 
 #include "framework.h"
@@ -11,6 +11,8 @@
 #include <windows.h>
 #include <thread>
 #include <atomic>
+#include <vector>
+#include <algorithm> // sort 위해 필요
 
 #define MAX_LOADSTRING 100
 #define TIMER_INTERVAL 50 // 20fps
@@ -47,6 +49,7 @@ const int dinoPixels[dinoHeight][dinoWidth] = {
     {0,0,0,0,0,1,1,0,0,0,1,1,0,0,0,0,0,0,0,0},
 };
 
+// 선인장 도트 그래픽 (8x8)
 const int cactusWidth = 8;
 const int cactusHeight = 8;
 const int cactusPixels[cactusHeight][cactusWidth] = {
@@ -60,22 +63,40 @@ const int cactusPixels[cactusHeight][cactusWidth] = {
     {0,1,0,0,0,1,0,0},
 };
 
-const int pixelSize = 10;
+// 익룡 도트 그래픽 (21x13)
+const int pteroWidth = 21;
+const int pteroHeight = 13;
+const int pteroPixels[pteroHeight][pteroWidth] = {
+    {0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,1,1,0,1,1,1,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,1,1,1,0,0,1,1,1,0,0,0,0,0,0,0,0,0},
+    {0,0,0,1,1,1,1,1,0,1,1,1,1,0,0,0,0,0,0,0,0},
+    {0,0,1,1,0,1,1,1,0,1,1,1,1,1,0,0,0,0,0,0,0},
+    {0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0},
+    {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1},
+    {0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,0},
+    {0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,0,0,0}
+};
+
+const int pixelSize = 5; // 픽셀 크기 절반 축소
 
 static std::atomic<int> dinoRealX(50);
 static std::atomic<int> dinoScreenX(50);
 static std::atomic<int> cameraXOffset(0);
 
-static int dx = 15; // 이동속도
+static int dx = 15;
 
-static std::atomic<int> dinoPosY(200);
+static std::atomic<int> dinoPosY(310);
 static std::atomic<bool> isJumping(false);
 static std::atomic<float> jumpVelocity(0.0f);
 
 const float gravity = 3.0f;
-const int groundY = 200;
+const int groundY = 310;
 
-// 아래키 눌림 상태
 static std::atomic<bool> downKeyPressed(false);
 
 struct Cactus {
@@ -83,15 +104,29 @@ struct Cactus {
     bool active;
 };
 
+struct Ptero {
+    int x;
+    bool active;
+    int assignedInterval; // 각 익룡이 할당된 선인장 간격 인덱스
+};
+
 const int MAX_CACTUS = 30;
+const int MAX_PTERO = 10;
+
 static Cactus cactusPool[MAX_CACTUS];
 static std::atomic<int> activeCactusCount(0);
+
+static Ptero pteroPool[MAX_PTERO];
+static std::atomic<int> activePteroCount(0);
+
 static std::atomic<bool> running(true);
 
-inline int GetRandomDistance() {
-    return 600 + rand() % 301; // 넉넉한 랜덤 간격
+// 랜덤 간격 생성 함수 (최소, 최대)
+inline int GetRandomDistance(int min, int max) {
+    return min + rand() % (max - min + 1);
 }
 
+// 비활성 선인장 인덱스 찾기
 inline int GetInactiveCactusIndex() {
     for (int i = 0; i < MAX_CACTUS; i++)
         if (!cactusPool[i].active)
@@ -99,6 +134,44 @@ inline int GetInactiveCactusIndex() {
     return -1;
 }
 
+// 비활성 익룡 인덱스 찾기
+inline int GetInactivePteroIndex() {
+    for (int i = 0; i < MAX_PTERO; i++)
+        if (!pteroPool[i].active)
+            return i;
+    return -1;
+}
+
+// 선인장 X좌표 오름차순 정렬
+void cactusPoolSortX() {
+    std::vector<Cactus> tempVec;
+    for (int i = 0; i < MAX_CACTUS; i++) {
+        if (cactusPool[i].active)
+            tempVec.push_back(cactusPool[i]);
+    }
+    std::sort(tempVec.begin(), tempVec.end(), [](const Cactus& a, const Cactus& b) {
+        return a.x < b.x;
+        });
+    int idx = 0;
+    for (int i = 0; i < MAX_CACTUS; i++) {
+        if (cactusPool[i].active) {
+            cactusPool[i] = tempVec[idx++];
+            if (idx >= (int)tempVec.size())
+                break;
+        }
+    }
+}
+
+// 익룡 배치 간 중복 방지 검사
+bool isIntervalAssigned(std::vector<int>& intervals, int interval) {
+    for (auto i : intervals) {
+        if (i == interval)
+            return true;
+    }
+    return false;
+}
+
+// 선인장 초기화
 void InitCactuses(int screenWidth) {
     for (int i = 0; i < MAX_CACTUS; i++) {
         cactusPool[i].active = false;
@@ -111,53 +184,183 @@ void InitCactuses(int screenWidth) {
         if (idx >= 0) {
             cactusPool[idx].active = true;
             cactusPool[idx].x = currentX;
-            currentX += GetRandomDistance();
+            currentX += GetRandomDistance(600, 900);
         }
     }
 }
 
+// 익룡 초기화 - 겹치지 않게 선인장 간격 기준 최대 1마리만
+void InitPteros(int screenWidth) {
+    for (int i = 0; i < MAX_PTERO; i++) {
+        pteroPool[i].active = false;
+        pteroPool[i].x = 0;
+        pteroPool[i].assignedInterval = -1;
+    }
+    activePteroCount = 5;
+
+    cactusPoolSortX();
+
+    std::vector<int> assignedIntervals; // 선인장 간격 - 익룡 할당 기록
+
+    int lastPteroX = screenWidth + pteroWidth * pixelSize + 1500;
+
+    for (int i = 0; i < activePteroCount; i++) {
+        int idx = GetInactivePteroIndex();
+        if (idx < 0) break;
+
+        if (activeCactusCount < 2) {
+            pteroPool[idx].x = lastPteroX + GetRandomDistance(1500, 1800);
+            pteroPool[idx].assignedInterval = -1;
+            pteroPool[idx].active = true;
+            lastPteroX = pteroPool[idx].x;
+            assignedIntervals.push_back(-1);
+            continue;
+        }
+
+        bool placed = false;
+
+        for (int interval = 0; interval < activeCactusCount - 1; interval++) {
+            if (!isIntervalAssigned(assignedIntervals, interval)) {
+                int leftX = cactusPool[interval].x;
+                int rightX = cactusPool[interval + 1].x;
+                int gap = rightX - leftX;
+                int maxGap = 900;
+
+                if (gap >= 0.8 * maxGap) {
+                    int centerX = (leftX + rightX) / 2;
+                    int offset = GetRandomDistance(-50, 50);
+                    pteroPool[idx].x = centerX + offset;
+                    pteroPool[idx].assignedInterval = interval;
+                    pteroPool[idx].active = true;
+                    assignedIntervals.push_back(interval);
+                    placed = true;
+                    lastPteroX = pteroPool[idx].x;
+                    break;
+                }
+            }
+        }
+
+        if (!placed) {
+            pteroPool[idx].x = lastPteroX + GetRandomDistance(1500, 1800);
+            pteroPool[idx].assignedInterval = -1;
+            pteroPool[idx].active = true;
+            lastPteroX = pteroPool[idx].x;
+            assignedIntervals.push_back(-1);
+        }
+    }
+}
+
+// 공룡 그리기 함수
 void DrawDino(HDC hdc, int posX, int posY, int pixelSize) {
-    for (int y = 0; y < dinoHeight; y++) {
-        for (int x = 0; x < dinoWidth; x++) {
+    for (int y = 0; y < dinoHeight; y++)
+        for (int x = 0; x < dinoWidth; x++)
             if (dinoPixels[y][x] == 1)
                 Rectangle(hdc, posX + x * pixelSize, posY + y * pixelSize, posX + (x + 1) * pixelSize, posY + (y + 1) * pixelSize);
-        }
-    }
 }
 
+// 선인장 그리기 함수
 void DrawCactus(HDC hdc, int posX, int posY, int pixelSize) {
-    for (int y = 0; y < cactusHeight; y++) {
-        for (int x = 0; x < cactusWidth; x++) {
+    for (int y = 0; y < cactusHeight; y++)
+        for (int x = 0; x < cactusWidth; x++)
             if (cactusPixels[y][x] == 1)
                 Rectangle(hdc, posX + x * pixelSize, posY + y * pixelSize, posX + (x + 1) * pixelSize, posY + (y + 1) * pixelSize);
-        }
-    }
 }
 
-void CactusProcessingThread(HWND hwnd) {
-    int lastX;
+// 익룡 그리기 함수
+void DrawPtero(HDC hdc, int posX, int posY, int pixelSize) {
+    for (int y = 0; y < pteroHeight; y++)
+        for (int x = 0; x < pteroWidth; x++)
+            if (pteroPixels[y][x] == 1)
+                Rectangle(hdc, posX + x * pixelSize, posY + y * pixelSize, posX + (x + 1) * pixelSize, posY + (y + 1) * pixelSize);
+}
+
+// 선인장 + 익룡 이동 및 재배치 스레드
+void CactusAndPteroProcessingThread(HWND hwnd) {
+    int lastCactusX;
+    int lastPteroX;
+
+    RECT rect;
+    GetClientRect(hwnd, &rect);
+
+    lastCactusX = rect.right + cactusWidth * pixelSize + 600;
+    lastPteroX = rect.right + pteroWidth * pixelSize + 1500;
+
     while (running) {
-        RECT rect;
         GetClientRect(hwnd, &rect);
 
-        lastX = rect.right + cactusWidth * pixelSize + 600;
+        lastCactusX = rect.right + cactusWidth * pixelSize + 600;
+        lastPteroX = rect.right + pteroWidth * pixelSize + 1500;
 
+        // 선인장 이동 및 재배치
         for (int i = 0; i < MAX_CACTUS; i++) {
             if (cactusPool[i].active) {
                 cactusPool[i].x -= dx;
 
                 if (cactusPool[i].x + cactusWidth * pixelSize < 0) {
-                    cactusPool[i].x = lastX + cactusWidth * pixelSize + 600 + GetRandomDistance();
+                    cactusPool[i].x = lastCactusX + cactusWidth * pixelSize + 600 + GetRandomDistance(600, 900);
                 }
 
-                if (cactusPool[i].x > lastX) {
-                    lastX = cactusPool[i].x;
-                }
+                if (cactusPool[i].x > lastCactusX)
+                    lastCactusX = cactusPool[i].x;
             }
         }
 
-        InvalidateRect(hwnd, nullptr, TRUE);
+        cactusPoolSortX();
 
+        // 익룡 이동 및 재배치 (X좌표만 이동, Y는 고정)
+        for (int i = 0; i < MAX_PTERO; i++) {
+            if (pteroPool[i].active) {
+                pteroPool[i].x -= dx;
+
+                if (pteroPool[i].x + pteroWidth * pixelSize < 0) {
+                    // 선인장 최소 2개 이상 필요
+                    if (activeCactusCount < 2) {
+                        pteroPool[i].x = lastPteroX + pteroWidth * pixelSize + 1500 + GetRandomDistance(600, 900);
+                        pteroPool[i].assignedInterval = -1;
+                    }
+                    else {
+                        std::vector<int> assignedIntervals;
+                        for (int j = 0; j < MAX_PTERO; j++) {
+                            if (pteroPool[j].active && pteroPool[j].assignedInterval >= 0)
+                                assignedIntervals.push_back(pteroPool[j].assignedInterval);
+                        }
+
+                        int intervalFound = -1;
+                        for (int interval = 0; interval < activeCactusCount - 1; interval++) {
+                            if (std::find(assignedIntervals.begin(), assignedIntervals.end(), interval) == assignedIntervals.end()) {
+                                intervalFound = interval;
+                                break;
+                            }
+                        }
+
+                        if (intervalFound >= 0) {
+                            int leftX = cactusPool[intervalFound].x;
+                            int rightX = cactusPool[intervalFound + 1].x;
+                            int gap = rightX - leftX;
+                            int maxGap = 900;
+
+                            if (gap >= 0.8 * maxGap) {
+                                int centerX = (leftX + rightX) / 2;
+                                int offset = GetRandomDistance(-50, 50);
+                                pteroPool[i].x = centerX + offset;
+                                pteroPool[i].assignedInterval = intervalFound;
+                            }
+                            else {
+                                pteroPool[i].x = rightX + 3 * 600 + GetRandomDistance(0, 300);
+                                pteroPool[i].assignedInterval = -1;
+                            }
+                        }
+                        else {
+                            pteroPool[i].x = lastPteroX + pteroWidth * pixelSize + 1500 + GetRandomDistance(600, 900);
+                            pteroPool[i].assignedInterval = -1;
+                        }
+                    }
+                }
+                if (pteroPool[i].x > lastPteroX)
+                    lastPteroX = pteroPool[i].x;
+            }
+        }
+        InvalidateRect(hwnd, nullptr, TRUE);
         std::this_thread::sleep_for(std::chrono::milliseconds(TIMER_INTERVAL));
     }
 }
@@ -167,7 +370,7 @@ BOOL InitInstance(HINSTANCE, int);
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK About(HWND, UINT, WPARAM, LPARAM);
 
-int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
+int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int nCmdShow) {
     UNREFERENCED_PARAMETER(nCmdShow);
 
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
@@ -175,7 +378,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
 
     MyRegisterClass(hInstance);
 
-    if (!InitInstance(hInstance, nCmdShow)) return FALSE;
+    if (!InitInstance(hInstance, nCmdShow))
+        return FALSE;
 
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
 
@@ -191,7 +395,8 @@ ATOM MyRegisterClass(HINSTANCE hInstance) {
     WNDCLASSEXW wcex = { sizeof(WNDCLASSEX) };
     wcex.style = CS_HREDRAW | CS_VREDRAW;
     wcex.lpfnWndProc = WndProc;
-    wcex.cbClsExtra = 0; wcex.cbWndExtra = 0;
+    wcex.cbClsExtra = 0;
+    wcex.cbWndExtra = 0;
     wcex.hInstance = hInstance;
     wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_DINORGAME));
     wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
@@ -207,6 +412,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow) {
     HWND hwnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, 0, 640, 580, nullptr, nullptr, hInstance, nullptr);
     if (!hwnd) return FALSE;
+
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
 
@@ -215,9 +421,10 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow) {
     srand((unsigned int)time(NULL));
 
     InitCactuses(rect.right);
+    InitPteros(rect.right);
 
-    std::thread cactusThread(CactusProcessingThread, hwnd);
-    cactusThread.detach();
+    std::thread movingThread(CactusAndPteroProcessingThread, hwnd);
+    movingThread.detach();
 
     return TRUE;
 }
@@ -237,7 +444,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         default:
             return DefWindowProc(hwnd, message, wParam, lParam);
         }
-    } break;
+    }
+                   break;
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
@@ -247,7 +455,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         const int floorY = 420;
 
         HBRUSH brush = CreateSolidBrush(RGB(230, 230, 230));
-        RECT marginRect = { 0, floorY + 1, rect.right, rect.bottom };
+        RECT marginRect = { 0,floorY + 1,rect.right,rect.bottom };
         FillRect(hdc, &marginRect, brush);
         DeleteObject(brush);
 
@@ -255,9 +463,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         LineTo(hdc, rect.right, floorY);
 
         for (int i = 0; i < MAX_CACTUS; i++) {
-            if (cactusPool[i].active) {
+            if (cactusPool[i].active)
                 DrawCactus(hdc, cactusPool[i].x - cameraXOffset.load(), floorY - pixelSize * cactusHeight, pixelSize);
-            }
+        }
+
+        int fixedPteroY = groundY - pixelSize * pteroHeight - 80; // 고정 Y
+
+        for (int i = 0; i < MAX_PTERO; i++) {
+            if (pteroPool[i].active)
+                DrawPtero(hdc, pteroPool[i].x - cameraXOffset.load(), fixedPteroY, pixelSize);
         }
 
         int centerX = rect.right / 2;
@@ -265,7 +479,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
 
         if (dinoRealX.load() < fixedDinoX) {
             int current = dinoRealX.load();
-            int step = dx * 3; // 3배 빠른 중앙 이동
+            int step = dx * 3;
             int nextPos = current + step;
             if (nextPos > fixedDinoX) nextPos = fixedDinoX;
             dinoRealX.store(nextPos);
@@ -280,29 +494,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         if (isJumping.load()) {
             int oldPos = dinoPosY.load();
             float oldVel = jumpVelocity.load();
-
-            // 아래키 누름에 따른 가속 관리
             bool downPressed = downKeyPressed.load();
-
             int fallStep = static_cast<int>(oldVel);
-            // 아래방향키 눌렀으면 기본 낙하 속도의 5배로 이동
-            if (downPressed && fallStep > 0) {
-                fallStep *= 5;
-            }
-
+            if (downPressed && fallStep > 0) fallStep *= 5;
             dinoPosY.store(oldPos + fallStep);
-            // 가속도 적용
             jumpVelocity.store(oldVel + gravity);
-
             if (dinoPosY.load() >= groundY) {
                 dinoPosY.store(groundY);
                 isJumping.store(false);
                 jumpVelocity.store(0.0f);
-                downKeyPressed.store(false); // 착지 후 아래키 상태 초기화
+                downKeyPressed.store(false);
             }
         }
 
         DrawDino(hdc, dinoScreenX.load(), dinoPosY.load(), pixelSize);
+
         EndPaint(hwnd, &ps);
         break;
     }
@@ -312,15 +518,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
             jumpVelocity.store(-35.0f);
         }
         else if (wParam == VK_DOWN) {
-            if (!downKeyPressed.load()) {
-                downKeyPressed.store(true);
-            }
+            if (!downKeyPressed.load()) downKeyPressed.store(true);
         }
         break;
     case WM_KEYUP:
-        if (wParam == VK_DOWN) {
-            downKeyPressed.store(false);
-        }
+        if (wParam == VK_DOWN) downKeyPressed.store(false);
         break;
     case WM_DESTROY:
         running.store(false);
