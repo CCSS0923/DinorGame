@@ -14,7 +14,7 @@
 #include <vector>
 #include <algorithm> // sort 함수 위해 필요
 
-using namespace std; // std:: 생략 가능
+using std::atomic; // std:: 생략 가능
 
 #define MAX_LOADSTRING 100
 #define TIMER_INTERVAL 50 // 20fps
