@@ -15,6 +15,7 @@
 #include <algorithm> // sort 함수 위해 필요
 
 using std::atomic; // std:: 생략 가능
+using std::vector;
 
 #define MAX_LOADSTRING 100
 #define TIMER_INTERVAL 50 // 20fps
@@ -50,6 +51,25 @@ const int dinoPixels[dinoHeight][dinoWidth] = {
     {0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,0,0,0},
     {0,0,0,0,0,1,1,0,0,0,1,1,0,0,0,0,0,0,0,0},
 };
+
+// 엎드린 공룡 도트 그래픽 (22x10)
+const int dinoDuckingWidth = 22;
+const int dinoDuckingHeight = 10;
+const int dinoDuckingPixels[dinoDuckingHeight][dinoDuckingWidth] = {
+    {0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0},
+    {0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0},
+    {0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0},
+    {0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0},
+    {0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0},
+    {0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,1,0,0,0,0,0,1,1,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,1,1,0,0,0,0,1,1,0,0,0,0,0,0},
+};
+
+//엎드림 상태 변수
+atomic<bool> isDucking(false);
 
 // 선인장 도트 그래픽 (8x8)
 const int cactusWidth = 8;
@@ -147,7 +167,7 @@ void cactusPoolSortX() {
         if (cactusPool[i].active)
             tempVec.push_back(cactusPool[i]);
     }
-    sort(tempVec.begin(), tempVec.end(), [](const Cactus& a, const Cactus& b) {
+    std::sort(tempVec.begin(), tempVec.end(), [](const Cactus& a, const Cactus& b) {
         return a.x < b.x;
         });
     int idx = 0;
@@ -242,10 +262,34 @@ void InitPteros(int screenWidth) {
 }
 
 void DrawDino(HDC hdc, int posX, int posY, int pixelSize) {
-    for (int y = 0; y < dinoHeight; y++)
-        for (int x = 0; x < dinoWidth; x++)
-            if (dinoPixels[y][x] == 1)
-                Rectangle(hdc, posX + x * pixelSize, posY + y * pixelSize, posX + (x + 1) * pixelSize, posY + (y + 1) * pixelSize);
+    if (isDucking.load()) {
+        int adjustedPosY = posY + (dinoHeight - dinoDuckingHeight) * pixelSize; // 보정된 Y 위치
+
+        for (int y = 0; y < dinoDuckingHeight; y++) {
+            for (int x = 0; x < dinoDuckingWidth; x++) {
+                if (dinoDuckingPixels[y][x] == 1) {
+                    Rectangle(hdc,
+                        posX + x * pixelSize,
+                        adjustedPosY + y * pixelSize,
+                        posX + (x + 1) * pixelSize,
+                        adjustedPosY + (y + 1) * pixelSize);
+                }
+            }
+        }
+    }
+    else {
+        for (int y = 0; y < dinoHeight; y++) {
+            for (int x = 0; x < dinoWidth; x++) {
+                if (dinoPixels[y][x] == 1) {
+                    Rectangle(hdc,
+                        posX + x * pixelSize,
+                        posY + y * pixelSize,
+                        posX + (x + 1) * pixelSize,
+                        posY + (y + 1) * pixelSize);
+                }
+            }
+        }
+    }
 }
 
 void DrawCactus(HDC hdc, int posX, int posY, int pixelSize) {
@@ -337,7 +381,7 @@ void CactusAndPteroProcessingThread(HWND hwnd) {
             }
         }
         InvalidateRect(hwnd, nullptr, TRUE);
-        this_thread::sleep_for(chrono::milliseconds(TIMER_INTERVAL));
+        std::this_thread::sleep_for(std::chrono::milliseconds(TIMER_INTERVAL));
     }
 }
 
@@ -399,7 +443,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow) {
     InitCactuses(rect.right);
     InitPteros(rect.right);
 
-    thread movingThread(CactusAndPteroProcessingThread, hwnd);
+    std::thread movingThread(CactusAndPteroProcessingThread, hwnd);
     movingThread.detach();
 
     return TRUE;
@@ -492,16 +536,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         if (wParam == VK_SPACE && !isJumping.load()) {
             isJumping.store(true);
             jumpVelocity.store(-35.0f);
+            isDucking.store(false); // 점프 중엔 엎드릴 수 없음
         }
         else if (wParam == VK_DOWN) {
-            if (!downKeyPressed.load())
-                downKeyPressed.store(true);
+            downKeyPressed.store(true);
+            if (!isJumping.load()) {
+                isDucking.store(true); // 엎드림 상태 진입
+            }
         }
         break;
 
     case WM_KEYUP:
-        if (wParam == VK_DOWN)
+        if (wParam == VK_DOWN) {
             downKeyPressed.store(false);
+            isDucking.store(false); // 엎드림 해제
+        }
         break;
 
     case WM_DESTROY:
