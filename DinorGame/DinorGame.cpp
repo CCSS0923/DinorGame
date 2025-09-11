@@ -25,9 +25,14 @@ WCHAR szTitle[MAX_LOADSTRING];
 WCHAR szWindowClass[MAX_LOADSTRING];
 
 // 공룡 도트 그래픽 (20x22)
-const int dinoWidth = 20;
-const int dinoHeight = 22;
-const int dinoPixels[dinoHeight][dinoWidth] = {
+struct dino
+{
+    static const int dinoWidth = 20;
+    static const int dinoHeight = 22;
+    static const int dinoPixels[dinoHeight][dinoWidth];
+};
+
+const int dinoPixels[dino::dinoHeight][dino::dinoWidth] = {
     {0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,0},
     {0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1},
     {0,0,0,0,0,0,0,0,0,0,1,1,0,1,1,1,1,1,1,1},
@@ -53,9 +58,13 @@ const int dinoPixels[dinoHeight][dinoWidth] = {
 };
 
 // 엎드린 공룡 도트 그래픽 (22x10)
-const int dinoDuckingWidth = 22;
-const int dinoDuckingHeight = 10;
-const int dinoDuckingPixels[dinoDuckingHeight][dinoDuckingWidth] = {
+struct duck
+{
+    static const int dinoDuckingWidth = 22;
+    static const int dinoDuckingHeight = 10;
+    static const int dinoDuckingPixels[dinoDuckingHeight][dinoDuckingWidth];
+};
+const int dinoDuckingPixels[duck::dinoDuckingHeight][duck::dinoDuckingWidth] = {
     {0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0},
     {0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0},
     {0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0},
@@ -72,9 +81,13 @@ const int dinoDuckingPixels[dinoDuckingHeight][dinoDuckingWidth] = {
 atomic<bool> isDucking(false);
 
 // 선인장 도트 그래픽 (8x8)
-const int cactusWidth = 8;
-const int cactusHeight = 8;
-const int cactusPixels[cactusHeight][cactusWidth] = {
+struct cactus
+{
+    static constexpr int cactusWidth = 8;
+    static constexpr int cactusHeight = 8;
+    static const int cactusPixels[cactusHeight][cactusWidth];
+};
+const int cactusPixels[cactus::cactusHeight][cactus::cactusWidth] = {
     {0,1,0,0,0,1,0,0},
     {0,1,0,0,0,1,0,0},
     {1,1,1,0,1,1,1,0},
@@ -192,7 +205,7 @@ void InitCactuses(int screenWidth) {
         cactusPool[i].active = false;
         cactusPool[i].x = 0;
     }
-    int currentX = screenWidth + cactusWidth * pixelSize + 300;
+    int currentX = screenWidth + cactus::cactusWidth * pixelSize + 300;
     activeCactusCount = 10;
     for (int i = 0; i < activeCactusCount; i++) {
         int idx = GetInactiveCactusIndex();
@@ -263,10 +276,10 @@ void InitPteros(int screenWidth) {
 
 void DrawDino(HDC hdc, int posX, int posY, int pixelSize) {
     if (isDucking.load()) {
-        int adjustedPosY = posY + (dinoHeight - dinoDuckingHeight) * pixelSize; // 보정된 Y 위치
+        int adjustedPosY = posY + (dino::dinoHeight - duck::dinoDuckingHeight) * pixelSize; // 보정된 Y 위치
 
-        for (int y = 0; y < dinoDuckingHeight; y++) {
-            for (int x = 0; x < dinoDuckingWidth; x++) {
+        for (int y = 0; y < duck::dinoDuckingHeight; y++) {
+            for (int x = 0; x < duck::dinoDuckingWidth; x++) {
                 if (dinoDuckingPixels[y][x] == 1) {
                     Rectangle(hdc,
                         posX + x * pixelSize,
@@ -278,8 +291,8 @@ void DrawDino(HDC hdc, int posX, int posY, int pixelSize) {
         }
     }
     else {
-        for (int y = 0; y < dinoHeight; y++) {
-            for (int x = 0; x < dinoWidth; x++) {
+        for (int y = 0; y < dino::dinoHeight; y++) {
+            for (int x = 0; x < dino::dinoWidth; x++) {
                 if (dinoPixels[y][x] == 1) {
                     Rectangle(hdc,
                         posX + x * pixelSize,
@@ -293,8 +306,8 @@ void DrawDino(HDC hdc, int posX, int posY, int pixelSize) {
 }
 
 void DrawCactus(HDC hdc, int posX, int posY, int pixelSize) {
-    for (int y = 0; y < cactusHeight; y++)
-        for (int x = 0; x < cactusWidth; x++)
+    for (int y = 0; y < cactus::cactusHeight; y++)
+        for (int x = 0; x < cactus::cactusWidth; x++)
             if (cactusPixels[y][x] == 1)
                 Rectangle(hdc, posX + x * pixelSize, posY + y * pixelSize, posX + (x + 1) * pixelSize, posY + (y + 1) * pixelSize);
 }
@@ -314,15 +327,15 @@ void CactusAndPteroProcessingThread(HWND hwnd) {
     while (running) {
         GetClientRect(hwnd, &rect);
 
-        lastCactusX = rect.right + cactusWidth * pixelSize + 600;
+        lastCactusX = rect.right + cactus::cactusWidth * pixelSize + 600;
         lastPteroX = rect.right + pteroWidth * pixelSize + 1500;
 
         for (int i = 0; i < MAX_CACTUS; i++) {
             if (cactusPool[i].active) {
                 cactusPool[i].x -= dx;
 
-                if (cactusPool[i].x + cactusWidth * pixelSize < 0) {
-                    cactusPool[i].x = lastCactusX + cactusWidth * pixelSize + 600 + GetRandomDistance(600, 900);
+                if (cactusPool[i].x + cactus::cactusWidth * pixelSize < 0) {
+                    cactusPool[i].x = lastCactusX + cactus::cactusWidth * pixelSize + 600 + GetRandomDistance(600, 900);
                 }
                 if (cactusPool[i].x > lastCactusX)
                     lastCactusX = cactusPool[i].x;
@@ -484,7 +497,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
 
         for (int i = 0; i < MAX_CACTUS; i++) {
             if (cactusPool[i].active)
-                DrawCactus(hdc, cactusPool[i].x - cameraXOffset.load(), floorY - pixelSize * cactusHeight, pixelSize);
+                DrawCactus(hdc, cactusPool[i].x - cameraXOffset.load(), floorY - pixelSize * cactus::cactusHeight, pixelSize);
         }
 
         int fixedPteroY = groundY - pixelSize * pteroHeight - 80;
